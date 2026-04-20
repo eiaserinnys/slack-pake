@@ -66,6 +66,10 @@ jobs:
       - name: Install pake-cli
         run: pnpm add -g pake-cli@${{ env.PAKE_VERSION }}
 
+      - name: Add x86_64 target (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+
       - name: Build (Linux)
         if: matrix.platform.os == 'ubuntu-latest'
         run: pake "$APP_URL" --name "$APP_NAME" --new-window --targets deb

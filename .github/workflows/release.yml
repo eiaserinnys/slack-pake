@@ -96,6 +96,11 @@ jobs:
       - name: Install pake-cli
         run: pnpm add -g pake-cli@${{ env.PAKE_VERSION }}
 
+      # macOS: add x86_64 target for universal binary
+      - name: Add x86_64 target (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        run: rustup target add x86_64-apple-darwin
+
       # macOS: Universal binary (Intel + Apple Silicon)
       - name: Build for macOS
         if: matrix.platform.os == 'macos-latest'
