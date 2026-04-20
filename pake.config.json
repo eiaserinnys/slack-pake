@@ -1,0 +1,12 @@
+{
+  "name": "Slack",
+  "url": "https://app.slack.com",
+  "options": {
+    "width": 1200,
+    "height": 780,
+    "resizable": true,
+    "hide-title-bar": false,
+    "new-window": true,
+    "multi-instance": false
+  }
+}

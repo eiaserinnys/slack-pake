@@ -1,0 +1,10 @@
+node_modules/
+output/
+dist/
+target/
+*.dmg
+*.msi
+*.deb
+*.AppImage
+.DS_Store
+Thumbs.db

@@ -1,0 +1,198 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+  PAKE_VERSION: "3.11.3"
+  APP_NAME: "Slack"
+  APP_URL: "https://app.slack.com"
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          skipIfReleaseExists: true
+          body: |
+            ## Slack Pake ${{ github.ref_name }}
+
+            Lightweight Slack desktop client built with [Pake](https://github.com/tw93/Pake) (Tauri).
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS (Universal) | `Slack.dmg` |
+            | Windows (x64) | `Slack_x64.msi` |
+            | Linux (x86_64) | `Slack_x86_64.deb`, `Slack_x86_64.AppImage` |
+
+  build:
+    name: ${{ matrix.platform.name }}
+    needs: [create-release]
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    runs-on: ${{ matrix.platform.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macOS
+            os: macos-latest
+            rust: stable
+          - name: Windows
+            os: windows-latest
+            rust: stable-x86_64-msvc
+          - name: Linux
+            os: ubuntu-latest
+            rust: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.platform.rust }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      # Linux dependencies for Tauri
+      - name: Install Linux dependencies
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup mold linker (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        uses: rui314/setup-mold@v1
+
+      - name: Install pake-cli
+        run: pnpm add -g pake-cli@${{ env.PAKE_VERSION }}
+
+      # macOS: Universal binary (Intel + Apple Silicon)
+      - name: Build for macOS
+        if: matrix.platform.os == 'macos-latest'
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: |
+          ARGS=("$APP_URL" "--name" "$APP_NAME")
+          ARGS+=("--hide-title-bar")
+          ARGS+=("--new-window")
+          ARGS+=("--targets" "universal" "--multi-arch")
+
+          if [ -f "assets/slack.icns" ]; then
+            ARGS+=("--icon" "assets/slack.icns")
+          fi
+
+          pake "${ARGS[@]}"
+
+          mkdir -p output
+          if [ -f "$APP_NAME.dmg" ]; then
+            mv "$APP_NAME.dmg" output/
+          else
+            DMG=$(find . -maxdepth 5 -name "*.dmg" -type f | head -1)
+            [ -n "$DMG" ] && mv "$DMG" "output/$APP_NAME.dmg"
+          fi
+
+      # Windows: x64 MSI installer
+      - name: Build for Windows
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $args = @("$env:APP_URL", "--name", "$env:APP_NAME")
+          $args += "--new-window"
+          $args += "--targets", "x64"
+
+          if (Test-Path "assets/slack.ico") {
+            $args += "--icon", "assets/slack.ico"
+          }
+
+          pake @args
+
+          New-Item -Path "output" -ItemType Directory -Force
+
+          $msi = "$env:APP_NAME.msi"
+          if (Test-Path $msi) {
+            Move-Item $msi "output/${env:APP_NAME}_x64.msi"
+          } else {
+            $found = Get-ChildItem -Recurse -Filter "*.msi" | Select-Object -First 1
+            if ($found) {
+              Move-Item $found.FullName "output/${env:APP_NAME}_x64.msi"
+            }
+          }
+
+      # Linux: deb + AppImage
+      - name: Build for Linux
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          ARGS=("$APP_URL" "--name" "$APP_NAME")
+          ARGS+=("--new-window")
+          ARGS+=("--targets" "deb,appimage")
+
+          if [ -f "assets/slack.png" ]; then
+            ARGS+=("--icon" "assets/slack.png")
+          fi
+
+          pake "${ARGS[@]}"
+
+          mkdir -p output
+
+          # Collect deb
+          if [ -f "${APP_NAME}.deb" ]; then
+            mv "${APP_NAME}.deb" "output/${APP_NAME}_$(arch).deb"
+          else
+            DEB=$(find . -maxdepth 5 -name "*.deb" -type f | head -1)
+            [ -n "$DEB" ] && mv "$DEB" "output/${APP_NAME}_$(arch).deb"
+          fi
+
+          # Collect AppImage
+          if [ -f "${APP_NAME}.AppImage" ]; then
+            mv "${APP_NAME}.AppImage" "output/${APP_NAME}_$(arch).AppImage"
+          else
+            AI=$(find . -maxdepth 5 -name "*.AppImage" -type f | head -1)
+            [ -n "$AI" ] && mv "$AI" "output/${APP_NAME}_$(arch).AppImage"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ matrix.platform.name }}
+          path: output/*
+          retention-days: 7
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          omitBody: true
+          omitName: true
+          artifacts: "output/*"
+          token: ${{ secrets.GITHUB_TOKEN }}

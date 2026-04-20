@@ -1,0 +1,88 @@
+name: Build Test
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10"
+  PAKE_VERSION: "3.11.3"
+  APP_NAME: "Slack"
+  APP_URL: "https://app.slack.com"
+
+jobs:
+  build-test:
+    name: Test (${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macOS
+            os: macos-latest
+            rust: stable
+          - name: Windows
+            os: windows-latest
+            rust: stable-x86_64-msvc
+          - name: Linux
+            os: ubuntu-latest
+            rust: stable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.platform.rust }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup mold linker (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        uses: rui314/setup-mold@v1
+
+      - name: Install pake-cli
+        run: pnpm add -g pake-cli@${{ env.PAKE_VERSION }}
+
+      - name: Build (Linux)
+        if: matrix.platform.os == 'ubuntu-latest'
+        run: pake "$APP_URL" --name "$APP_NAME" --new-window --targets deb
+
+      - name: Build (macOS)
+        if: matrix.platform.os == 'macos-latest'
+        env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
+        run: pake "$APP_URL" --name "$APP_NAME" --hide-title-bar --new-window --targets dmg
+
+      - name: Build (Windows)
+        if: matrix.platform.os == 'windows-latest'
+        shell: pwsh
+        run: pake "$env:APP_URL" --name "$env:APP_NAME" --new-window --targets x64
+
+      - name: Verify output exists
+        shell: bash
+        run: |
+          echo "Build artifacts:"
+          find . -maxdepth 5 \( -name "*.dmg" -o -name "*.msi" -o -name "*.deb" -o -name "*.AppImage" \) -type f
